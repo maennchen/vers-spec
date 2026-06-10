@@ -93,7 +93,8 @@ therefore needs only one of the two; the other is definable from it.
 
 Infima and suprema are positions in the scheme's ordering, not version strings.
 What constitutes a "minor series boundary" or a "pre-release floor" is
-determined by the scheme's own structure.
+determined by the scheme's own structure. Because no version is ever equal to
+a cut, inclusive and exclusive bounds against a cut coincide.
 
 ## Primitive 2: The segment
 
@@ -149,14 +150,63 @@ line but not at the 2.0.0 boundary:
 The end bound `< inf(2.0.0)` already excludes `2.0.0-rc.1` while permitting
 `1.4.0-beta.1` — no filter is needed. The infimum does the work.
 
-## Primitive 3: The fork
+## Forks and branches
 
 A **fork** is a point in the DAG where one branch diverges into two or more.
-A fork is identified by the node at which the divergence occurs.
+Beyond a fork, linear ordering no longer implies inheritance: a fix applied
+on one branch says nothing about its siblings. A range that crosses a fork
+must therefore distinguish the branches, and branches not covered by any part
+of the range are outside it.
 
-A range that crosses a fork must **explicitly enumerate** which branches to
-follow beyond the fork point. Branches not named are outside the range.
-Linear ordering cannot be assumed to carry meaning across a fork boundary.
+This raises the central evaluability question: **where does the evaluator's
+knowledge of branch membership come from?** There are three cases.
+
+### The scheme encodes the branch
+
+In hierarchical schemes, the version string itself names the branch: every
+`1.4.x` version belongs to the `1.4` series by construction. Branch
+membership is then exactly an interval between two cuts:
+
+> branch `1.4.x` = [`inf(1.4.0)`, `sup(1.4.x)`)
+
+A range built from such intervals is **self-contained**: a tool holding only
+the expression and a flat list of version strings can decide membership for
+every version, released or future, with no access to the underlying
+repository. This is the design goal wherever the scheme's structure permits
+it — the expression itself carries the branch information.
+
+A consequence is that forks need no operator of their own: a range that
+crosses a fork is a union of per-branch segments, each bounded by cuts.
+
+### The identifier encodes the branch
+
+Some ecosystems place branch identity outside the version string, in the
+package identifier. Debian is the canonical case: the same source package has
+parallel per-suite streams (`1.0-1+deb11u1` on bullseye, `1.0-1+deb12u1` on
+bookworm), and advisories scope the package per suite — in purl terms, via
+the `distro` qualifier — writing one linear range per stream. The branch
+dimension is handled by enumerating (identifier, range) pairs, each of which
+is again self-contained within its stream.
+
+A range notation should compose with this identifier-level partitioning
+rather than absorb it: a range describes one ordered version space; naming
+the streams is the package identifier's job.
+
+### Only the graph encodes the branch
+
+For schemes whose identifiers carry no order at all — git commit hashes, and
+git tags absent a naming convention — both ordering and branch membership are
+reachability questions whose answers exist only in the repository. No
+expression over identifier strings can be self-contained; this is a property
+of the scheme, not a fixable gap in any notation. Tools without graph access
+must treat such ranges as not evaluable rather than fall back to an invented
+ordering — silent linearization produces wrong answers.
+
+One operation remains self-contained even here: identity. Exact pins and
+explicit enumerations of identifiers are decidable by string comparison
+alone. Since retrospective ranges (advisories) describe finite, closed sets,
+enumeration is always available as the evaluable fallback for graph-only
+schemes.
 
 ### Example: a vulnerability spanning two branches
 
@@ -170,18 +220,19 @@ A vulnerability is introduced before a fork at node `1.3.5`, where the
           1.4.0 → 1.4.1 → 1.4.2 → 1.4.3 (fixed)
 ```
 
-The affected range must be described as two separate segments:
+The affected range is a union of two segments, one per branch:
 
-- Segment A: from the introduction point to `1.3.6` (inclusive), on the
-  `1.3.x` branch.
-- Segment B: from the fork node `1.3.5` to `1.4.2` (inclusive), on the
-  `1.4.x` branch.
+- Segment A: from the introduction point up to but not including `1.3.7`.
+- Segment B: from `inf(1.4.0)` up to but not including `1.4.3`.
 
-`1.4.0` is in segment B even though `1.4.0 > 1.3.7` numerically. The
-numerical ordering across branches does not imply fix inheritance. The fork
-makes the two branches independent paths, each requiring its own segment.
+`1.4.0` is in segment B even though `1.4.0 > 1.3.7` numerically — the union
+of two segments is not an interval, and membership is tested per segment.
+The numerical ordering across branches does not imply fix inheritance. Both
+segments are decidable from version strings alone, because semver encodes
+the branch in the version prefix: the cut `inf(1.4.0)` is where the `1.4`
+series begins.
 
-## Primitive 4: Composition operators
+## Primitive 3: Composition operators
 
 ### Union
 

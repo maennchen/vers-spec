@@ -15,12 +15,12 @@ Mermaid) are **included** in the range. Normal commits are excluded.
 | [1](#example-1-simple-linear-range) | Simple linear range | ✓ | `vers:semver/>=1.1.0\|<2.0.0` |
 | [2](#example-2-single-segment-with-filter) | Segment with filter (stable only) | ~ | No filter primitive; depends on whether the scheme implicitly excludes pre-releases |
 | [3](#example-3-union-of-two-disjoint-segments) | Union of two disjoint segments | ✓ | `vers:semver/>=1.1.0\|<1.3.0\|>=2.0.0\|<3.0.0` |
-| [4](#example-4-cve-spanning-a-version-scheme-switch-and-multiple-parallel-branches-erlangotp) | Erlang CVE (scheme switch + forks) | ✗ | One scheme per VERS; R-series and numeric are incomparable; no fork primitive |
+| [4](#example-4-cve-spanning-a-version-scheme-switch-and-multiple-parallel-branches-erlangotp) | Erlang CVE (scheme switch + forks) | ✗ | One scheme per VERS; R-series and numeric are incomparable |
 | [5](#example-5-elixir--13-stable-lower-bound) | Elixir `~> 1.3` | ~ | No infimum concept; `2.0.0-beta.1` included or excluded depending on scheme definition |
 | [6](#example-6-elixir--13-beta-pre-release-lower-bound) | Elixir `~> 1.3-beta` | ~ | Same as above; lower bound expressible, upper bound ambiguous at pre-release boundary |
 | [7](#example-7-complement--excluding-a-specific-bad-version) | Complement — exclude one version | ✓ | `!=` comparator handles this: `vers:semver/>=1.0.0\|!=1.2.3\|<2.0.0` |
 | [8](#example-8-intersection--safe-and-compatible) | Intersection (safe + compatible) | ✗ | No intersection primitive |
-| [9](#example-9-fork-with-no-fix-on-an-abandoned-branch) | Fork, no fix on abandoned branch | ✗ | No fork primitive; open-ended and closed segments on sibling branches cannot be expressed together |
+| [9](#example-9-fork-with-no-fix-on-an-abandoned-branch) | Fork, no fix on abandoned branch | ~ | `vers:semver/>=1.3.0\|<1.3.5\|>=1.4.0\|<1.5.0` approximates, but without cuts the `1.4.x` cap misplaces `1.5.0` pre-releases |
 | [10](#example-10-orphan-branch--disconnected-roots) | Orphan / disconnected roots | ✗ | One scheme per VERS; cannot express membership across two disconnected graphs |
 | [11](#example-11-debian-epoch-bump) | Debian epoch bump | ✓ | `deb` scheme orders across epochs, so one constraint pair spans the bump: `vers:deb/>=1:0.9.0-1\|<2:1.2.0-1` |
 | [12](#example-12-version-scheme-switch--date-based-to-semver) | Version scheme switch (calver → semver) | ✗ | One scheme per VERS; incompatible version spaces cannot be unioned |
@@ -28,7 +28,8 @@ Mermaid) are **included** in the range. Normal commits are excluded.
 | [14](#example-14-floating-label) | Floating label (`latest`) | ✗ | No concept of a node whose identity is resolved at evaluation time against an external source |
 | [15](#example-15-compound-dependency-requirement-union-intersection-and-complement) | Compound dependency requirement (OR, AND, exclusion) | ~ | OR expressible; AND and exclusion depend on ecosystem |
 | [16](#example-16-unbounded-range-any-version) | Unbounded range (any version) | ✓ | `vers:semver/*` |
-| [17](#example-17-implicit-universe-with-exceptions) | Implicit universe with exceptions | ✗ | Exceptions are open-ended per branch; `!=` excludes only single versions and there is no fork primitive. Single-version exceptions alone would work: `vers:semver/!=1.2.3\|!=2.0.0` |
+| [17](#example-17-implicit-universe-with-exceptions) | Implicit universe with exceptions | ~ | Invertible by hand into affected intervals `vers:semver/<1.2.3\|>=2.0.0\|<2.0.1`, but the universe-minus-exceptions structure is lost and the pre-release boundary at `2.0.0` is ambiguous without cuts |
+| [18](#example-18-fork-with-fixes-on-both-branches) | Fork with fixes on both branches | ✓ | `vers:semver/>=1.5.1\|<1.5.3\|>=1.6.0\|<1.6.2` — both windows closed by concrete fixes, so plain interval pairs suffice |
 
 ## Notation reference
 
@@ -39,11 +40,6 @@ SEGMENT(
   to <comparator> <version>,     -- omit for open upper bound
   filter = <predicate>           -- omit for no filter
 )
-
-FORK(<version>) {
-  <branch-label>: <expression>
-  <branch-label>: <expression>
-}
 
 UNION(
   <expression>,
@@ -219,7 +215,7 @@ The R-series and the numeric series use incompatible version schemes and share
 no comparable version space, so they must be expressed as separate segments
 under different schemes joined by UNION. Within the numeric series, the `26.x`,
 `27.x`, and `28.x` lines are parallel branches that diverged from a common
-ancestor, so they are expressed with FORK.
+ancestor; each gets its own segment, bounded by its own fix point.
 
 ```
 UNION(
@@ -228,15 +224,9 @@ UNION(
     from >= R13B
   ),
   SEGMENT(scheme = otp, from >= 17.0, to < 26.0),
-  FORK(26.0) {
-    26.x: SEGMENT(scheme = otp, from >= 26.0, to < 26.2.5)
-  },
-  FORK(27.0) {
-    27.x: SEGMENT(scheme = otp, from >= 27.0, to < 27.1.1)
-  },
-  FORK(28.0) {
-    28.x: SEGMENT(scheme = otp, from >= 28.0, to < 28.0.1)
-  }
+  SEGMENT(scheme = otp, from >= 26.0, to < 26.2.5),
+  SEGMENT(scheme = otp, from >= 27.0, to < 27.1.1),
+  SEGMENT(scheme = otp, from >= 28.0, to < 28.0.1)
 )
 ```
 
@@ -283,9 +273,15 @@ for that line — every R-series release from R13B onwards is affected.
 
 Second, within the numeric series, the vulnerability runs unbroken from `17.0`
 through `25.3` on the main line. At `26.0`, `27.0`, and `28.0` the maintenance
-branches fork off in turn. Each forked branch continues to be affected up to
-its own fix point, expressed as a separate FORK. The fix in `26.2.5` does not
-imply anything about `27.x` or `28.x` — each branch is independent.
+branches fork off in turn, and each continues to be affected up to its own fix
+point — the fix in `26.2.5` does not imply anything about `27.x` or `28.x`.
+Because OTP version numbers encode the branch (every `26.x` release shares the
+`26` prefix), each branch is a plain bounded segment decidable from version
+strings alone: `[26.0, 26.2.5)` contains exactly the affected `26.x` releases,
+while `26.2.5`, later `26.x` patches, and `27.0` all sort above its upper
+bound. Adjacent segments such as `[17.0, 26.0)` and `[26.0, 26.2.5)` could be
+merged into one; the split mirrors the branch structure but is not needed for
+correctness.
 
 Third, `25.x` reached end-of-life without receiving a patch. It is naturally
 covered by the main segment (`to < 26.0`) — no special handling is needed. The
@@ -484,10 +480,10 @@ The `1.4.x` branch was abandoned before a fix was issued — every `1.4.x`
 release is affected.
 
 ```
-FORK(1.3.0) {
-  1.3.x: SEGMENT(scheme = semver, from >= 1.3.0, to < 1.3.5),
-  1.4.x: SEGMENT(scheme = semver, from >= 1.4.0)
-}
+UNION(
+  SEGMENT(scheme = semver, from >= 1.3.0, to < 1.3.5),
+  SEGMENT(scheme = semver, from >= inf(1.4.0), to < inf(1.5.0))
+)
 ```
 
 ```mermaid
@@ -507,10 +503,15 @@ gitGraph
 
 **Result:** `1.3.0`–`1.3.4` on the `1.3.x` branch; all of `1.4.x`
 
-**Why:** The `1.4.x` segment has no upper bound — it is open-ended because no
-fix was ever issued. The branch is in scope (it is listed in the FORK), but
-every version on it is affected. This is distinct from omitting the branch
-entirely, which would mean "out of scope for this advisory".
+**Why:** The `1.4.x` branch never received a fix, so its segment covers the
+entire `1.4` minor series — the interval between the cuts `inf(1.4.0)` and
+`inf(1.5.0)` (which equals `sup(1.4.x)`). The cuts cap "affected forever on
+this branch" at the branch's end instead of letting an open bound spill into
+`1.5.0` and beyond, and they cover every future `1.4.x` patch. Because semver
+encodes the branch in the version prefix, both segments are decidable from
+version strings alone — no repository access is needed. A branch covered by
+no segment is out of scope for this advisory; covering it with its full
+series interval, as here, means every version on it is affected.
 
 ## Example 10: Orphan branch — disconnected roots
 
@@ -519,8 +520,8 @@ with semver releases, and a `gh-pages` documentation branch created as an
 orphan with its own independent tags. A range needs to cover affected versions
 in both.
 
-Since there is no shared ancestor, this cannot be expressed as a FORK. It is
-a UNION of two segments under two different schemes.
+The two histories share no ancestor and no common ordering, so no segment can
+span them. The range is a UNION of two segments under two different schemes.
 
 ```
 UNION(
@@ -548,7 +549,7 @@ gitGraph
 
 **Result:** `1.0.0`–`1.9.0` (semver); `docs-1.0`–`docs-1.9` (git-tag)
 
-**Why:** FORK requires a shared ancestor node. When none exists, only UNION can
+**Why:** With no shared ancestor and no common ordering, only UNION can
 express membership across the two disconnected graphs. Each segment is
 evaluated independently within its own scheme. A version in either set
 satisfies the range.
@@ -870,10 +871,10 @@ what is not.
 
 ```
 COMPLEMENT(
-  FORK(1.2.2) {
-    1.x: SEGMENT(scheme = semver, from >= 1.2.3),
-    2.x: SEGMENT(scheme = semver, from >= 2.0.1)
-  },
+  UNION(
+    SEGMENT(scheme = semver, from >= 1.2.3, to < inf(2.0.0)),
+    SEGMENT(scheme = semver, from >= 2.0.1)
+  ),
   within = SEGMENT(scheme = semver)
 )
 ```
@@ -902,11 +903,14 @@ except `1.2.3` and later on the `1.x` branch and `2.0.1` and later on the
 **Why:** The `within` of the COMPLEMENT is the unbounded segment (Example 16).
 The excluded set must be branch-scoped: an unrestricted open-ended segment
 `from >= 1.2.3` would also swallow `2.0.0`, which sorts above `1.2.3` but is
-affected until `2.0.1`. The FORK restricts each exception to its own branch.
-The key difference from Example 7 is that the `within` is the entire version
-space rather than a named bounded range — the universe is implicit. A notation
-that requires an explicit `within` cannot express this without first naming
-the universe.
+affected until `2.0.1`. The cut `inf(2.0.0)` caps the `1.x` exception at the
+end of the `1.x` line, so `2.0.0` (and its pre-releases, which sit above the
+cut) stay affected. The `2.x` exception is genuinely open-ended: everything
+at or above `2.0.1` descends from that fix. Both exceptions are decidable
+from version strings alone. The key difference from Example 7 is that the
+`within` is the entire version space rather than a named bounded range — the
+universe is implicit. A notation that requires an explicit `within` cannot
+express this without first naming the universe.
 
 **Real-world equivalents:**
 
@@ -916,6 +920,58 @@ the universe.
 | RubyGems | `!= 1.2.3` | Exclusion from an implicit universe of all versions; the `within` is unstated |
 | Python (PEP 440) | `!= 1.2.3` | Same — `!=` is COMPLEMENT within the implicit unbounded range |
 | npm | `"!= 1.2.3"` (not standard, but `"* <1.2.3 || >1.2.3"` achieves it) | npm has no `!=`; exclusion requires writing around the gap explicitly |
+
+## Example 18: Fork with fixes on both branches
+
+A bug is introduced at `1.5.1`. The `1.6.x` line branches off at `1.5.2`,
+inheriting the bug. The fix lands at `1.5.3` on the `1.5.x` branch and at
+`1.6.2` on the `1.6.x` branch; `1.6.0` and `1.6.1` are affected.
+
+```
+UNION(
+  SEGMENT(scheme = semver, from >= 1.5.1, to < 1.5.3),
+  SEGMENT(scheme = semver, from >= 1.6.0, to < 1.6.2)
+)
+```
+
+```mermaid
+gitGraph
+   commit id: "1.5.0"
+   commit id: "1.5.1" type: HIGHLIGHT
+   commit id: "1.5.2" type: HIGHLIGHT
+   branch "1.6.x"
+   checkout "1.6.x"
+   commit id: "1.6.0" type: HIGHLIGHT
+   commit id: "1.6.1" type: HIGHLIGHT
+   commit id: "1.6.2"
+   checkout main
+   commit id: "1.5.3"
+   commit id: "1.5.4"
+```
+
+**Result:** `1.5.1`–`1.5.2`; `1.6.0`–`1.6.1`
+
+**Why:** Each branch's affected window is closed by its own fix, so both
+segments are bounded by concrete versions and no cuts are needed. The union
+is not an interval: `1.5.3` and `1.5.4` sort between `1.5.2` and `1.6.0` yet
+are excluded — the gap in the linear order is the fixed tail of the `1.5.x`
+branch, which is how the fork shows up in a flat version list. Membership is
+decidable from version strings alone, because semver sorts every `1.6.x`
+version above every `1.5.x` version: neither window can capture the other
+branch's versions. Contrast with Example 9, where the abandoned branch has no
+fix and its segment must be capped by cuts instead of a known version.
+
+This is the most common real-world advisory shape: a vulnerability spanning
+maintenance branches, each fixed independently.
+
+**Real-world equivalents:**
+
+| Ecosystem | Expression | Notes |
+|-----------|-----------|-------|
+| OSV schema | Two `ranges` entries: `introduced: 1.5.1` / `fixed: 1.5.3` and `introduced: 1.6.0` / `fixed: 1.6.2` | One introduced/fixed pair per branch |
+| GitHub Security Advisories | Two affected-version ranges on one advisory | |
+| npm | `">=1.5.1 <1.5.3 \|\| >=1.6.0 <1.6.2"` | |
+| Maven | `[1.5.1,1.5.3),[1.6.0,1.6.2)` | |
 
 ## Constructs considered but not represented
 

@@ -22,13 +22,13 @@ Mermaid) are **included** in the range. Normal commits are excluded.
 | [8](#example-8-intersection--safe-and-compatible) | Intersection (safe + compatible) | ✗ | No intersection primitive |
 | [9](#example-9-fork-with-no-fix-on-an-abandoned-branch) | Fork, no fix on abandoned branch | ✗ | No fork primitive; open-ended and closed segments on sibling branches cannot be expressed together |
 | [10](#example-10-orphan-branch--disconnected-roots) | Orphan / disconnected roots | ✗ | One scheme per VERS; cannot express membership across two disconnected graphs |
-| [11](#example-11-debian-epoch-bump) | Debian epoch bump | ✓ | `deb` scheme handles epochs; expressible as two constraint pairs |
+| [11](#example-11-debian-epoch-bump) | Debian epoch bump | ✓ | `deb` scheme orders across epochs, so one constraint pair spans the bump: `vers:deb/>=1:0.9.0-1\|<2:1.2.0-1` |
 | [12](#example-12-version-scheme-switch--date-based-to-semver) | Version scheme switch (calver → semver) | ✗ | One scheme per VERS; incompatible version spaces cannot be unioned |
 | [13](#example-13-open-ended-prospective-range) | Open-ended prospective range | ~ | `vers:semver/>=2.0.0` works, but no stable filter; pre-release inclusion depends on scheme |
 | [14](#example-14-floating-label) | Floating label (`latest`) | ✗ | No concept of a node whose identity is resolved at evaluation time against an external source |
 | [15](#example-15-compound-dependency-requirement-union-intersection-and-complement) | Compound dependency requirement (OR, AND, exclusion) | ~ | OR expressible; AND and exclusion depend on ecosystem |
 | [16](#example-16-unbounded-range-any-version) | Unbounded range (any version) | ✓ | `vers:semver/*` |
-| [17](#example-17-implicit-universe-with-exceptions) | Implicit universe with exceptions | ✓ | `vers:semver/!=1.2.3\|!=2.0.0` — `!=` comparator excludes specific versions from the implicit universe |
+| [17](#example-17-implicit-universe-with-exceptions) | Implicit universe with exceptions | ✗ | Exceptions are open-ended per branch; `!=` excludes only single versions and there is no fork primitive. Single-version exceptions alone would work: `vers:semver/!=1.2.3\|!=2.0.0` |
 
 ## Notation reference
 
@@ -246,7 +246,6 @@ gitGraph
    commit id: "R14B" type: HIGHLIGHT
    commit id: "R15B" type: HIGHLIGHT
    commit id: "R16B03-1" type: HIGHLIGHT
-   commit id: "--- scheme change (no fix in R-series) ---" type: HIGHLIGHT
    commit id: "17.0" type: HIGHLIGHT
    commit id: "18.0" type: HIGHLIGHT
    commit id: "25.3" type: HIGHLIGHT
@@ -571,10 +570,7 @@ Without encoding the epoch, `1:99.9.9-1` would sort above `2:1.0.0-1` in
 plain numeric comparison and appear to be outside the range — incorrectly.
 
 ```
-UNION(
-  SEGMENT(scheme = deb, from >= 1:0.9.0-1),
-  SEGMENT(scheme = deb, from >= 2:0.0.1-1, to < 2:1.2.0-1)
-)
+SEGMENT(scheme = deb, from >= 1:0.9.0-1, to < 2:1.2.0-1)
 ```
 
 ```mermaid
@@ -582,7 +578,6 @@ gitGraph
    commit id: "1:0.9.0-1" type: HIGHLIGHT
    commit id: "1:0.9.9-1" type: HIGHLIGHT
    commit id: "1:99.9.9-1" type: HIGHLIGHT
-   commit id: "--- epoch bump ---" type: HIGHLIGHT
    commit id: "2:0.0.1-1" type: HIGHLIGHT
    commit id: "2:1.0.0-1" type: HIGHLIGHT
    commit id: "2:1.2.0-1"
@@ -591,12 +586,17 @@ gitGraph
 
 **Result:** All `1:*` versions from `1:0.9.0-1`; `2:0.0.1-1` through `2:1.1.x`
 
-**Why:** The epoch is part of the version identity in the `deb` scheme. The two
-epoch series are effectively separate ordered spaces joined end-to-end by
-convention. The first segment covers the entire `1:` epoch (open-ended, since
-no fix existed there); the second covers the `2:` epoch up to the fix. A
-notation that strips epochs and treats both as plain version strings would
-incorrectly place `1:99.9.9-1` outside the `2:` range, missing it entirely.
+**Why:** The epoch is part of the version identity in the `deb` scheme, and
+epoch comparison takes precedence over everything else: every `2:*` version
+sorts above every `1:*` version. The ordering is therefore total across the
+bump, and a single segment spans both epoch series — the two series are
+separate counter spaces joined end-to-end by the epoch. A notation that strips
+epochs and treats both as plain version strings would incorrectly place
+`1:99.9.9-1` outside the range (it sorts above `2:1.0.0-1` numerically),
+missing it entirely. The bump can equivalently be made explicit by splitting
+at the epoch boundary into two segments joined by UNION — `[1:0.9.0-1,
+2:0.0.1-1)` and `[2:0.0.1-1, 2:1.2.0-1)` — but the single segment is
+sufficient.
 
 **Real-world equivalents:**
 
@@ -629,7 +629,6 @@ gitGraph
    commit id: "2021.01" type: HIGHLIGHT
    commit id: "2021.06" type: HIGHLIGHT
    commit id: "2022.03" type: HIGHLIGHT
-   commit id: "--- scheme change ---" type: HIGHLIGHT
    commit id: "1.0.0" type: HIGHLIGHT
    commit id: "1.1.0" type: HIGHLIGHT
    commit id: "1.3.0" type: HIGHLIGHT
@@ -858,10 +857,12 @@ the range notation itself.
 
 ## Example 17: Implicit universe with exceptions
 
-A vulnerability advisory declares that **all versions are affected by default**,
-then lists specific fixed versions as exceptions. The affected set is the entire
-version space minus the exceptions — the complement of a small exclusion set
-within an implicit unbounded range.
+A vulnerability advisory declares that **all versions are affected by
+default**, then lists the fixes as exceptions: `1.2.3` on the `1.x` branch
+and `2.0.1` on the `2.x` line. Each fix and everything released after it on
+its own branch is unaffected. The affected set is the entire version space
+minus the exceptions — the complement of the fixed ranges within an implicit
+unbounded range.
 
 This inverts the usual model. Instead of enumerating what is included, the
 author declares a default membership for the whole universe and enumerates
@@ -869,10 +870,10 @@ what is not.
 
 ```
 COMPLEMENT(
-  UNION(
-    SEGMENT(scheme = semver, from >= 1.2.3),   -- fixed in 1.2.3
-    SEGMENT(scheme = semver, from >= 2.0.1)    -- fixed in 2.0.1
-  ),
+  FORK(1.2.2) {
+    1.x: SEGMENT(scheme = semver, from >= 1.2.3),
+    2.x: SEGMENT(scheme = semver, from >= 2.0.1)
+  },
   within = SEGMENT(scheme = semver)
 )
 ```
@@ -894,21 +895,24 @@ gitGraph
    commit id: "3.0.0"
 ```
 
-**Result:** Everything except `>= 1.2.3` and `>= 2.0.1` — i.e. `< 1.2.3` and
-`>= 2.0.0, < 2.0.1`.
+**Result:** `1.0.0`–`1.2.2` (the shared history) and `2.0.0` — everything
+except `1.2.3` and later on the `1.x` branch and `2.0.1` and later on the
+`2.x` line, including all future releases on either branch.
 
 **Why:** The `within` of the COMPLEMENT is the unbounded segment (Example 16).
-The excluded set is the union of fixed ranges. This is structurally equivalent
-to a COMPLEMENT with an explicit `within`, but the key difference from
-Example 7 is that the `within` is the entire version space rather than a named
-bounded range — the universe is implicit. A notation that requires an explicit
-`within` cannot express this without first naming the universe.
+The excluded set must be branch-scoped: an unrestricted open-ended segment
+`from >= 1.2.3` would also swallow `2.0.0`, which sorts above `1.2.3` but is
+affected until `2.0.1`. The FORK restricts each exception to its own branch.
+The key difference from Example 7 is that the `within` is the entire version
+space rather than a named bounded range — the universe is implicit. A notation
+that requires an explicit `within` cannot express this without first naming
+the universe.
 
 **Real-world equivalents:**
 
 | Ecosystem | Expression | Notes |
 |-----------|-----------|-------|
-| CVE JSON v5 | `defaultStatus: "affected"` with `fixed` entries | Versions not listed are assumed affected; each `fixed` entry marks the start of an unaffected range |
+| CVE JSON v5 | `defaultStatus: "affected"` with `fixed` entries | Versions not listed are assumed affected; each `fixed` entry starts an unaffected range on its branch |
 | RubyGems | `!= 1.2.3` | Exclusion from an implicit universe of all versions; the `within` is unstated |
 | Python (PEP 440) | `!= 1.2.3` | Same — `!=` is COMPLEMENT within the implicit unbounded range |
 | npm | `"!= 1.2.3"` (not standard, but `"* <1.2.3 || >1.2.3"` achieves it) | npm has no `!=`; exclusion requires writing around the gap explicitly |

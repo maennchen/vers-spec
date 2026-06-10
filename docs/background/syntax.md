@@ -3,11 +3,14 @@
 This document proposes a set of extensions to the
 [VERS](https://github.com/package-url/vers-spec) version range notation. The
 goal is to make VERS capable of expressing every range primitive defined in
-[dag-range-primitives.md](dag-range-primitives.md), while remaining
-backward-compatible with existing VERS expressions.
+[dag-range-primitives.md](dag-range-primitives.md).
 
-The extensions are additive. Every valid VERS expression today is valid under
-this proposal without modification.
+The extensions are syntactically additive: every valid VERS expression today
+still parses under this proposal. They are built on one deliberate semantic
+change — the comparator list becomes a conjunction instead of a list of
+interval boundaries — which alters the meaning of some existing expressions.
+See [Backward compatibility](#backward-compatibility) for the details and the
+migration rule.
 
 This is a working draft for discussion — not a finalized proposal.
 
@@ -19,32 +22,49 @@ Current VERS expresses a range as:
 vers:<scheme>/<comparator-list>
 ```
 
-where the comparator list is a `|`-separated sequence of constraints that are
-ANDed together. A version matches if and only if it satisfies every constraint
-in the list.
+where the comparator list is a `|`-separated sequence of constraints. The
+current specification gives this list **interval semantics**: the constraints
+are sorted by version and treated as boundaries of alternating intervals, and
+a version matches if it is contained within any of those intervals. For
+example, `vers:semver/>=1.1.0|<1.3.0|>=2.0.0|<3.0.0` matches the two disjoint
+intervals `[1.1.0, 1.3.0)` and `[2.0.0, 3.0.0)`.
 
-This covers simple linear ranges well. It cannot express:
+This proposal **reinterprets the comparator list as a conjunction**: a version
+matches a list if and only if it satisfies every constraint in it. Union is
+expressed explicitly with parenthesized blocks (Extension 1) instead of being
+implied by the interval pairing. The motivation: once cuts, filters, fork
+blocks, intersection, and subtraction enter the notation, the implicit
+pairing rule no longer has a well-defined meaning, while a conjunction gives
+every constraint an independent one. This is a breaking semantic change; see
+[Backward compatibility](#backward-compatibility).
+
+Even with its interval semantics, current VERS cannot express:
 
 - Ranges that span multiple version schemes
 - Ranges that split across parallel branches (forks)
-- Upper bounds that exclude pre-releases without a filter
+- Upper bounds that exclude pre-releases of the bound (infima)
 - Stable-only filters
-- Sub-range exclusion (complement)
 - Intersection of independently authored constraints
+- Sub-range exclusion as a composable operator (today the author must
+  manually rewrite the surrounding range into the intervals around the gap)
 
 Each of these gaps is addressed below.
 
-## Extension 1: Multi-scheme union
+## Extension 1: Union blocks
 
-A range may span multiple version schemes by wrapping each scheme's constraints
-in parentheses and joining them with `|`:
+A range may be the union of several constraint blocks. Each block is wrapped
+in parentheses, names its own scheme, and is evaluated independently; the
+blocks are joined with `|`:
 
 ```
 vers:(<scheme>/<comparator-list>)|(<scheme>/<comparator-list>)
 ```
 
 A version matches the expression if it matches any one of the parenthesized
-scheme blocks. Each block is evaluated independently within its own scheme.
+blocks. The schemes of two blocks may differ — joining incompatible version
+spaces — or repeat, uniting disjoint sub-ranges within a single scheme. The
+repeated-scheme form replaces the implicit interval pairing of current VERS
+(see [Backward compatibility](#backward-compatibility)).
 
 A single-scheme expression without parentheses is unchanged:
 
@@ -67,18 +87,27 @@ calver release is affected; the fix exists only in the semver line at `1.4.0`.
 vers:(calver-ym/>=2021.01)|(semver/>=1.0.0|<1.4.0)
 ```
 
+**Example — union of two disjoint ranges in one scheme:**
+
+The two disjoint intervals of Example 3, written as two blocks under the same
+scheme:
+
+```
+vers:(semver/>=1.1.0|<1.3.0)|(semver/>=2.0.0|<3.0.0)
+```
+
 **Example — Debian epoch bump:**
 
-A vulnerability spans two epoch series. The first epoch has no fix; the second
-is fixed at `2:1.2.0-1`.
+A vulnerability spans two epoch series; the fix is `2:1.2.0-1`.
 
 ```
-vers:(deb/>=1:0.9.0-1)|(deb/>=2:0.0.1-1|<2:1.2.0-1)
+vers:(deb/>=1:0.9.0-1|<2:0.0.1-1)|(deb/>=2:0.0.1-1|<2:1.2.0-1)
 ```
 
-Note: the Debian epoch bump can also be expressed in a single scheme block
-because the `deb` scheme defines epoch ordering within one comparator space.
-The two-block form makes the structural split explicit; either is valid.
+Note: because the `deb` scheme orders epochs before everything else, its
+ordering is total across the bump and the same range is expressible as a
+single block: `vers:deb/>=1:0.9.0-1|<2:1.2.0-1`. The two-block form merely
+makes the structural split explicit; either is valid.
 
 ## Extension 2: Fork
 
@@ -130,10 +159,11 @@ syntax.
 ## Extension 3: Infimum
 
 Some upper bounds cannot be expressed as a concrete version without ambiguity
-at the pre-release boundary. The infimum of a version `v`, written `^v`, is
-the position immediately before the first pre-release of `v` in the scheme's
-ordering. A bound of `<^v` excludes all pre-releases of `v` while including
-all versions that sort below them.
+at the pre-release boundary. The infimum of a version `v`, written `^v`, is a
+cut in the scheme's ordering (see
+[dag-range-primitives.md](dag-range-primitives.md)): the position immediately
+below the lowest pre-release of `v`. A bound of `<^v` excludes all
+pre-releases of `v` while including all versions that sort below them.
 
 ```
 <^<version>
@@ -248,15 +278,17 @@ A scheme aware normalizer reduces this to `vers:semver/>=1.6.0|<^2.0.0`.
 
 **Example — safe and compatible (Example 8):**
 
-Versions of `foo` that are compatible (`>=2.0.0|<3.0.0`) and not vulnerable
-(`>=2.1.0|<2.2.0` is the vulnerable range):
+Versions of `foo` that are compatible (`>=2.0.0|<3.0.0`) and not in the
+vulnerable range (`>=2.1.0|<2.2.0`). Example 8 phrases this as an
+intersection with a complement, A ∩ (U \ B); since A ∩ (U \ B) = A \ B, the
+notation expresses it directly with set-minus (Extension 6):
 
 ```
-vers:semver/>=2.0.0|<3.0.0&*\>=2.1.0|<2.2.0
+vers:semver/>=2.0.0|<3.0.0\>=2.1.0|<2.2.0
 ```
 
-The right side is the universe minus the vulnerable range; intersecting with
-the compatibility range gives `2.0.x` and `2.2.0`–`2.9.x`.
+The result is `2.0.x` and `2.2.0`–`2.9.x`. The `&` operator itself is for
+intersecting independently authored ranges, as in the example above.
 
 **Cross-scheme intersection:** intersection is computed per-scheme
 independently. A version with no identity in a scheme cannot satisfy a
@@ -300,14 +332,19 @@ vers:semver/>=1.0.0|<3.0.0\>=1.2.0|<1.3.0
 
 All `1.x` and `2.x` releases except the broken `1.2.x` range.
 
-**Example — implicit universe with exceptions (Example 17):**
+**Example — subtracting from the implicit universe:**
 
 ```
-vers:semver/*\>=1.2.3\>=2.0.1
+vers:semver/*\=1.2.3\=2.0.0
 ```
 
-All versions, minus everything from `1.2.3` onward, minus everything from
-`2.0.1` onward. The result is `<1.2.3` and `>=2.0.0,<2.0.1`.
+All versions except `1.2.3` and `2.0.0`. Equivalent to the existing
+`vers:semver/!=1.2.3|!=2.0.0`; the set-minus form additionally scales to
+excluding whole sub-ranges, which `!=` cannot express.
+
+The full form of Example 17 — exceptions that are open-ended *per branch* —
+requires combining `\` with fork blocks (Extension 2) on the right-hand side,
+so that each subtracted segment is scoped to its branch.
 
 ## Operator precedence summary
 
@@ -319,14 +356,13 @@ From highest to lowest:
 | 2 | `\|` | AND (comparator list within a segment) |
 | 3 | `&` | Intersection |
 | 4 | `\` | Set-minus (complement) |
-| 5 | `(scheme/...)\|(scheme/...)` | Multi-scheme union |
+| 5 | `(scheme/...)\|(scheme/...)` | Union of blocks |
 
 ## Grammar (informal)
 
 ```
-expression      = multi-union | single-segment
-multi-union     = "(" scheme-block ")" ("|" "(" scheme-block ")")+
-single-segment  = "vers:" scheme "/" complement-expr
+expression      = "vers:" ( block-union | scheme-block )
+block-union     = "(" scheme-block ")" ("|" "(" scheme-block ")")+
 scheme-block    = scheme "/" complement-expr
 complement-expr = intersect-expr ("\" intersect-expr)*
 intersect-expr  = comparator-list ("&" comparator-list)*
@@ -339,16 +375,29 @@ filter          = "#" filter-name
 filter-name     = "stable"
 ```
 
-For `multi-union`, the `vers:` prefix appears once before the opening
-parenthesis:
-
-```
-vers:(<scheme-block>)|(<scheme-block>)
-```
-
 ## Backward compatibility
 
-Every existing VERS expression is valid under this proposal. No existing
-comparator syntax is modified. The new characters `@`, `{`, `}`, `^`, `#`,
-`\`, `&`, and `(`, `)` are not used in any current VERS comparator and do not
-conflict with any existing version scheme string.
+**Syntax.** Every existing VERS expression still parses under this proposal.
+No existing comparator syntax is modified, and the new characters `@`, `{`,
+`}`, `^`, `#`, `\`, `&`, and `(`, `)` are not used in any current VERS
+comparator and do not conflict with any existing version scheme string.
+
+**Semantics.** This proposal is not semantically backward-compatible. Current
+VERS gives the comparator list interval semantics; this proposal gives it
+conjunction semantics. The two readings agree on any list that describes a
+single interval — at most one lower and one upper bound, plus any number of
+`!=` exclusions — which covers the common case. They disagree on lists that
+encode multiple intervals: `vers:semver/>=1.1.0|<1.3.0|>=2.0.0|<3.0.0` means
+two disjoint intervals today but is unsatisfiable as a conjunction.
+
+The migration is mechanical. Sort the constraints by version (as the current
+containment algorithm already does), split the list at each interval
+boundary, and wrap each interval in a union block (Extension 1):
+
+```
+vers:semver/>=1.1.0|<1.3.0|>=2.0.0|<3.0.0
+→ vers:(semver/>=1.1.0|<1.3.0)|(semver/>=2.0.0|<3.0.0)
+```
+
+The rewrite needs no knowledge of the underlying scheme beyond the version
+ordering that the current containment algorithm already requires.

@@ -50,6 +50,16 @@ semver" is a positional node — its concrete identity depends on what has
 actually been released. Positional nodes are useful for expressing open-ended
 bounds that resolve against a known version set.
 
+### Labels
+
+Some ecosystems also name nodes by **labels** — `latest`, `next`, an npm
+dist-tag — resolved to a concrete node by an external authority such as a
+registry. A label differs from a positional node in kind, not degree: a
+positional node is a function of the version set (given the released
+versions, its identity is determined), while a label's resolution is
+external state that no inspection of the version set can reproduce — the
+authority may point it anywhere.
+
 ### Infima and suprema
 
 Some bounds cannot be expressed as either a concrete version or a simple
@@ -87,9 +97,11 @@ Two namings for these cuts are useful:
   the highest patch ever released.
 
 The two are dual descriptions of the same kind of object, and they can
-coincide: every possible semver version is either in the `1.3.x` series or at
-or above the `1.4.0` family, so `sup(1.3.x) = inf(1.4.0)`. A notation
-therefore needs only one of the two; the other is definable from it.
+coincide: no possible semver version lies strictly between the `1.3.x`
+series and the `1.4.0` family — every version above all of `1.3.x` is at or
+above the lowest possible pre-release of `1.4.0` — so
+`sup(1.3.x) = inf(1.4.0)`. A notation therefore needs only one of the two;
+the other is definable from it.
 
 Infima and suprema are positions in the scheme's ordering, not version strings.
 What constitutes a "minor series boundary" or a "pre-release floor" is
@@ -98,21 +110,23 @@ a cut, inclusive and exclusive bounds against a cut coincide.
 
 ## Primitive 2: The segment
 
-A **segment** is a connected, directed path through the DAG within a single
-version scheme: from a start node to an end node, staying on one branch.
+A **segment** is the set of all possible versions of a single scheme that
+lie between a lower and an upper bound in the scheme's ordering. A segment
+is an interval in the order, not a region of the graph: membership is
+decided by comparing a version against the bounds, which is what keeps a
+segment evaluable against a flat list of version strings.
 
 A segment has the following components:
 
 **Scheme**: the version scheme governing node identity and ordering within this
 segment. All nodes in a segment share the same scheme.
 
-**Start node**: the lower bound of the segment, inclusive or exclusive. May be
-a concrete version, a positional node, or a cut (infimum/supremum). An absent
-start bound means the segment extends to the beginning of the branch.
+**Lower bound**: inclusive or exclusive. May be a concrete version, a
+positional node, or a cut (infimum/supremum). An absent lower bound means
+the segment extends to the beginning of the scheme's ordering.
 
-**End node**: the upper bound of the segment, inclusive or exclusive, or absent
-(unbounded). May be a concrete version, a positional node, or a cut
-(infimum/supremum).
+**Upper bound**: inclusive or exclusive, or absent (unbounded). May be a
+concrete version, a positional node, or a cut (infimum/supremum).
 
 **Filter predicate**: a boolean condition on node properties, applied within the
 segment after the bounds are resolved. Examples:
@@ -124,14 +138,58 @@ segment after the bounds are resolved. Examples:
 Filters are scheme-aware: what counts as "pre-release" is defined by the scheme
 itself (semver's `-alpha` suffix, debian's `~` component, etc.).
 
+### Segments and the graph
+
+A segment corresponds to a path in the DAG exactly when its bounds are
+aligned with the branch structure. When the scheme encodes branches in the
+version string and the bounds are two cuts of one series — `[inf(1.4.0),
+inf(1.5.0))` is the `1.4.x` branch — or an introduction point and a fix on
+the same branch, the interval contains precisely the versions of one
+branch: a connected, directed path, staying on that branch. This
+conditional coincidence is what lets cut-bounded segments stand in for a
+fork primitive (see "Forks and branches" below).
+
+The coincidence is not guaranteed. Nothing prevents bounds that straddle a
+fork: in the two-branch example below (fixes at `1.3.7` and `1.4.3`), the
+single interval `[1.3.5, 1.4.3)` is a well-defined segment, but it spans
+both branches and includes the fixed release `1.3.7`. No evaluator can
+detect the misalignment — detecting it would require the graph — so branch
+alignment is the author's responsibility, supported by the scheme's
+structure through cuts. A branch-misaligned segment is an authoring error,
+not an undefined expression.
+
 ### Scoped filters
 
-A filter need not apply uniformly across the whole segment. Filters can be
-*scoped* to a position-relative condition within the segment. A concrete
-example from Elixir's `~>` operator illustrates this:
+A filter need not apply uniformly across the whole segment: it can be
+*scoped* to a position-relative condition. npm's caret with a pre-release
+bound is the canonical case. `^1.3.0-beta` means `>= 1.3.0-beta < 2.0.0`,
+with pre-releases admitted only where the `[major, minor, patch]` tuple
+matches the bound that carries the pre-release: `1.3.0-rc.1` matches,
+`1.4.0-rc.1` does not, `1.4.0` does. Stated as a segment:
 
-`~> 1.3` expresses: start at `>= 1.3.0`, end at `< 2.0.0`, exclude all
-pre-releases. Stated as a segment:
+- Start: `>= 1.3.0-beta`
+- End: `< 2.0.0`
+- Filter: exclude pre-releases, except those of `1.3.0`
+
+The predicate depends on where a version sits relative to the bound, not on
+the version alone. A scoped filter is nevertheless not an additional
+primitive: it decomposes into a union of sub-segments with uniform filters,
+split at the cut where the scope changes —
+
+- [`1.3.0-beta`, `inf(1.3.1)`): no filter — every version here carries the
+  `1.3.0` tuple, so its pre-releases are admitted
+- [`inf(1.3.1)`, `2.0.0`): filter: exclude pre-releases
+
+### Filter or cut: two readings of `~>`
+
+Whether a pre-release boundary effect is a filter or a cut depends on the
+mode of evaluation. Elixir's `~>` operator exhibits both readings:
+`~> 1.3` translates to `>= 1.3.0 and < 2.0.0`, and Elixir evaluates it in
+two modes.
+
+When pre-releases are disallowed (`allow_pre: false`, the Hex resolver's
+behavior for requirements that name no pre-release), the constraint is a
+segment with a filter:
 
 - Start: `>= 1.3.0`
 - End: `< 2.0.0`
@@ -140,8 +198,10 @@ pre-releases. Stated as a segment:
 The filter removes all pre-release nodes within the segment, including
 `1.4.0-beta.1` and `2.0.0-rc.1` (which would otherwise fall below `2.0.0`).
 
-An alternate reading, `~> 1.3` with pre-releases allowed within the 1.3.x
-line but not at the 2.0.0 boundary:
+In the default mode of
+[`Version.match?/3`](https://hexdocs.pm/elixir/Version.html#match?/3)
+(`allow_pre: true`), pre-releases are allowed within the range but not at
+the 2.0.0 boundary — `1.4.0-rc.1` matches, `2.0.0-beta.1` does not:
 
 - Start: `>= 1.3.0`
 - End: `< inf(2.0.0)`
@@ -201,6 +261,17 @@ expression over identifier strings can be self-contained; this is a property
 of the scheme, not a fixable gap in any notation. Tools without graph access
 must treat such ranges as not evaluable rather than fall back to an invented
 ordering — silent linearization produces wrong answers.
+
+Branch information can also live only in the graph for a scheme whose
+strings *do* carry a total order but no series structure — a flat date- or
+serial-numbered scheme on a forked history. There the ordering comparators
+stay decidable from strings, yet no expression over them can separate the
+branches: releases from parallel branches interleave in the order, and an
+interval meant for one branch silently captures the other's. No expression
+over such a scheme can repair this; the remedies lie outside the range:
+enumerate the affected versions, separate the streams outside the range
+notation (as purl-style package identifiers do — see above), or switch to a
+version scheme that encodes the branch.
 
 One operation remains self-contained even here: identity. Exact pins and
 explicit enumerations of identifiers are decidable by string comparison

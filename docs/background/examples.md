@@ -10,6 +10,13 @@ usability. It is not a proposal for any real syntax.
 In the diagrams, **highlighted** commits (rendered in a distinct color by
 Mermaid) are **included** in the range. Normal commits are excluded.
 
+The **Representable in VERS** column grades each example against the current
+VERS specification: ✓ — current VERS expresses the example directly; ~ —
+current VERS can denote the resulting version set only approximately or by
+hand-computing it, losing the authoring structure (composition, cuts,
+filters); ✗ — current VERS cannot denote the set at all (multiple schemes in
+one range, or resolution against external state).
+
 | # | Example | Representable in VERS | Notes |
 |---|---------|:---------------------:|-------|
 | [1](#example-1-simple-linear-range) | Simple linear range | ✓ | `vers:semver/>=1.1.0\|<2.0.0` |
@@ -19,14 +26,14 @@ Mermaid) are **included** in the range. Normal commits are excluded.
 | [5](#example-5-elixir--13-stable-lower-bound) | Elixir `~> 1.3` | ~ | No infimum concept; `2.0.0-beta.1` included or excluded depending on scheme definition |
 | [6](#example-6-elixir--13-beta-pre-release-lower-bound) | Elixir `~> 1.3-beta` | ~ | Same as above; lower bound expressible, upper bound ambiguous at pre-release boundary |
 | [7](#example-7-complement--excluding-a-specific-bad-version) | Complement — exclude one version | ✓ | `!=` comparator handles this: `vers:semver/>=1.0.0\|!=1.2.3\|<2.0.0` |
-| [8](#example-8-intersection--safe-and-compatible) | Intersection (safe + compatible) | ✗ | No intersection primitive |
-| [9](#example-9-fork-with-no-fix-on-an-abandoned-branch) | Fork, no fix on abandoned branch | ~ | `vers:semver/>=1.3.0\|<1.3.5\|>=1.4.0\|<1.5.0` approximates, but without cuts the `1.4.x` cap misplaces `1.5.0` pre-releases |
+| [8](#example-8-intersection--safe-and-compatible) | Intersection (safe + compatible) | ~ | No intersection in current VERS; invertible by hand into `vers:semver/>=2.0.0\|<2.1.0\|>=2.2.0\|<3.0.0`, losing the two independently authored constraints |
+| [9](#example-9-fork-with-no-fix-on-an-abandoned-branch) | Fork, no fix on abandoned branch | ~ | `vers:semver/>=1.3.0\|<1.3.5\|>=1.4.0\|<1.5.0` approximates, but without cuts the `1.4.x` bounds misplace pre-releases: `1.4.0` pre-releases are wrongly excluded, `1.5.0` pre-releases wrongly included |
 | [10](#example-10-orphan-branch--disconnected-roots) | Orphan / disconnected roots | ✗ | One scheme per VERS; cannot express membership across two disconnected graphs |
 | [11](#example-11-debian-epoch-bump) | Debian epoch bump | ✓ | `deb` scheme orders across epochs, so one constraint pair spans the bump: `vers:deb/>=1:0.9.0-1\|<2:1.2.0-1` |
 | [12](#example-12-version-scheme-switch--date-based-to-semver) | Version scheme switch (calver → semver) | ✗ | One scheme per VERS; incompatible version spaces cannot be unioned |
 | [13](#example-13-open-ended-prospective-range) | Open-ended prospective range | ~ | `vers:semver/>=2.0.0` works, but no stable filter; pre-release inclusion depends on scheme |
 | [14](#example-14-floating-label) | Floating label (`latest`) | ✗ | No concept of a node whose identity is resolved at evaluation time against an external source |
-| [15](#example-15-compound-dependency-requirement-union-intersection-and-complement) | Compound dependency requirement (OR, AND, exclusion) | ~ | OR expressible; AND and exclusion depend on ecosystem |
+| [15](#example-15-compound-dependency-requirement-union-intersection-and-complement) | Compound dependency requirement (OR, AND, exclusion) | ~ | OR (interval pairs) and exclusion (`!=`) expressible; the stable filter and the intersection with an independently authored constraint are not — the result set must be hand-computed |
 | [16](#example-16-unbounded-range-any-version) | Unbounded range (any version) | ✓ | `vers:semver/*` |
 | [17](#example-17-implicit-universe-with-exceptions) | Implicit universe with exceptions | ~ | Invertible by hand into affected intervals `vers:semver/<1.2.3\|>=2.0.0\|<2.0.1`, but the universe-minus-exceptions structure is lost and the pre-release boundary at `2.0.0` is ambiguous without cuts |
 | [18](#example-18-fork-with-fixes-on-both-branches) | Fork with fixes on both branches | ✓ | `vers:semver/>=1.5.1\|<1.5.3\|>=1.6.0\|<1.6.2` — both windows closed by concrete fixes, so plain interval pairs suffice |
@@ -54,6 +61,11 @@ INTERSECT(
 )
 
 COMPLEMENT(<expression>, within = <expression>)
+
+NODE(
+  scheme = <scheme>,
+  label = <label>                -- resolved by an external authority
+)
 ```
 
 A compound expression uses either all UNIONs or all INTERSECTs at the top
@@ -254,14 +266,13 @@ gitGraph
    commit id: "28.0" type: HIGHLIGHT
    branch "28.x"
    checkout "28.x"
-   commit id: "28.0.0" type: HIGHLIGHT
    commit id: "28.0.1"
 ```
 
 **Result:** All R13B and later releases in the R-series (no fix was ever issued); all 17.0 up to (not including) 26.0 on the main numeric line;
 all 26.0–26.2.4 releases on the 26.x
-branch; all 27.0–27.1.0 releases on the 27.x branch; all 28.0–28.0.0 releases
-on the 28.x branch.
+branch; all 27.0–27.1.0 releases on the 27.x branch; 28.0 on the 28.x branch
+(its only release before the fix).
 
 **Why:** Three structural features are at work here simultaneously.
 
@@ -281,7 +292,9 @@ strings alone: `[26.0, 26.2.5)` contains exactly the affected `26.x` releases,
 while `26.2.5`, later `26.x` patches, and `27.0` all sort above its upper
 bound. Adjacent segments such as `[17.0, 26.0)` and `[26.0, 26.2.5)` could be
 merged into one; the split mirrors the branch structure but is not needed for
-correctness.
+correctness. Trailing zero components are insignificant in the `otp` scheme —
+`28.0`, `28.0.0`, and `28.0.0.0` denote the same version, with `28.0` as the
+canonical form.
 
 Third, `25.x` reached end-of-life without receiving a patch. It is naturally
 covered by the main segment (`to < 26.0`) — no special handling is needed. The
@@ -554,6 +567,15 @@ express membership across the two disconnected graphs. Each segment is
 evaluated independently within its own scheme. A version in either set
 satisfies the range.
 
+The `git-tag` scheme is graph-ordered: its identifiers carry no
+string-decidable order, and `>= docs-1.0, < docs-2.0` denotes the tags that
+are descendants of `docs-1.0` and ancestors of `docs-2.0` in the
+repository's graph. The bounds are meaningful, but evaluating membership
+requires repository access — a tool holding only a flat tag list must
+report this segment as not evaluable, or the author must enumerate the
+affected tags instead. The semver segment remains decidable from version
+strings alone.
+
 **Same pattern, different notation:**
 
 | Ecosystem | Expression | Notes |
@@ -692,8 +714,11 @@ on whether the version graph remains compatible beyond what the author can see.
 ## Example 14: Floating label
 
 A package author declares a dependency on `latest` — a named label that the
-registry resolves to the current highest stable release at the time the
-dependency is evaluated.
+registry resolves to a concrete version at evaluation time. The pointer is
+mutable and registry-assigned: by default npm moves `latest` to each newly
+published version (which need not be the highest — publishing a `1.9.1`
+LTS patch after `2.0.0` moves `latest` to `1.9.1`), and `npm dist-tag` can
+point it at any version at all.
 
 ```
 NODE(
@@ -722,14 +747,17 @@ gitGraph
 **Result:** Whichever node the registry currently associates with the label
 `latest` — a single node, but not a fixed one.
 
-**Why:** A floating label is a degenerate segment — it resolves to exactly one
-node, but that node's identity is determined at evaluation time by an external
-source (the registry), not by the version string itself. This is fundamentally
-different from a pinned exact version like `[2.0.0, 2.0.0]`, whose identity is
-fixed at authoring time. Two evaluations of the same floating label at different
-points in time may return different nodes. No segment, bound, filter, or
-infimum can express this — the primitive required is a named, externally
-resolved pointer.
+**Why:** A floating label resolves to exactly one node, but that node's
+identity is determined at evaluation time by an external source (the
+registry), not by the version strings. It differs from a pinned exact
+version, whose identity is fixed at authoring time — and, more subtly, from
+a positional node like "the highest stable release", which is a function of
+the version set: given the same released versions, a positional node always
+resolves the same way, while a label may point anywhere the registry was
+told to point it. Two evaluations of the same label at different times may
+return different nodes even if nothing was published in between (the tag
+was moved). No segment, bound, filter, or infimum can express this — the
+primitive required is a named, externally resolved pointer.
 
 **Real-world equivalents:**
 

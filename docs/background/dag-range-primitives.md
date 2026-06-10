@@ -81,7 +81,11 @@ the cut and those above it, without themselves corresponding to any release.
 In semver, the cut associated with a release `M.m.p` separates the versions
 whose `(major, minor, patch)` tuple is below `(M, m, p)` from those whose
 tuple is `(M, m, p)` or higher — pre-release identifiers are ignored when
-locating the cut, so all pre-releases of `M.m.p` fall above it.
+locating the cut, so all pre-releases of `M.m.p` fall above it. The cut is
+defined only for versions carrying no pre-release or build identifiers:
+`inf(2.0.0-rc.1)` does not exist — between pre-releases, ordinary exclusive
+bounds (`< 2.0.0-rc.1`) already name every position, so a cut would add
+nothing.
 
 Two namings for these cuts are useful:
 
@@ -275,9 +279,11 @@ version scheme that encodes the branch.
 
 One operation remains self-contained even here: identity. Exact pins and
 explicit enumerations of identifiers are decidable by string comparison
-alone. Since retrospective ranges (advisories) describe finite, closed sets,
+alone. The versions released at any point in time form a finite set, so
 enumeration is always available as the evaluable fallback for graph-only
-schemes.
+schemes — but only as a snapshot: where an advisory leaves a branch open
+(no fix exists), versions released after the enumeration was written are
+affected but not listed.
 
 ### Example: a vulnerability spanning two branches
 
@@ -334,9 +340,10 @@ of the two semver segments.
 
 ### Complement
 
-The **complement** of a segment S within a universe U (U \ S, where `\` means
-"minus" or "except" — see [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)))
-contains every version in U that is not in S. In version range terms: it is
+The **complement** of a segment S within a bounding set W (W \ S, where `\`
+means "minus" or "except" — see
+[set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)))
+contains every version in W that is not in S. In version range terms: it is
 how exclusions are expressed — "all versions in this branch except the patched
 ones" is the branch segment minus the patched sub-segment.
 

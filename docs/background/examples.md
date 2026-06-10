@@ -68,8 +68,13 @@ NODE(
 )
 ```
 
-A compound expression uses either all UNIONs or all INTERSECTs at the top
-level — mixing is not allowed.
+A compound expression follows one of the two normal forms of
+[dag-range-primitives.md](dag-range-primitives.md): a UNION of terms (DNF)
+or an INTERSECT of clauses (CNF). Each term or clause is a segment, a node,
+or a COMPLEMENT — whose operands may in turn be unions, as in Example 17.
+A single term standing alone (Example 17's top-level COMPLEMENT) is the
+degenerate case of either form. Beyond that, UNION and INTERSECT do not
+nest inside one another; arbitrary mixing is not allowed.
 
 ## Example 1: Simple linear range
 
@@ -201,27 +206,32 @@ does not imply anything about the versions between them.
 
 | Ecosystem | Expression |
 |-----------|-----------|
-| Python (PEP 440) | `>=1.1.0, <1.3.0 \|\| >=2.0.0, <3.0.0` |
 | npm | `">=1.1.0 <1.3.0 \|\| >=2.0.0 <3.0.0"` |
+| Elixir | `>= 1.1.0 and < 1.3.0 or >= 2.0.0 and < 3.0.0` |
 | OSV schema | Two separate `ranges` entries |
 | NVD CPE | Two separate `versionStartIncluding`/`versionEndExcluding` pairs |
+
+PEP 440 cannot express this: its comma-joined specifiers are conjunctive
+only, with no disjunction operator.
 
 **Same pattern, different notation:**
 
 | Ecosystem | Expression | Notes |
 |-----------|-----------|-------|
 | Maven | `[1.0,1.2),(1.4,2.0)` | Math interval notation; two disjoint ranges in a single expression using parentheses (exclusive) and brackets (inclusive) |
+| Elixir | `~> 1.3 or ~> 2.7` | Two pessimistic constraints joined by `or`: `[1.3.0, 2.0.0)` ∪ `[2.7.0, 3.0.0)` — disjoint, with the gap `[2.0.0, 2.7.0)` excluded |
 
 ## Example 4: CVE spanning a version scheme switch and multiple parallel branches (Erlang/OTP)
 
 A hypothetical CVE affects Erlang/OTP from the beginning of the R13 series all
 the way through the current numeric release lines. It was fixed in:
 
-- `R16B03-1` — the last R-series release (entire R13–R16 line is affected up
-  to and including the fix)
 - `26.2.5` on the `26.x` branch
 - `27.1.1` on the `27.x` branch
 - `28.0.1` on the `28.x` branch
+
+The R-series never received a fix: `R16B03-1` is simply the last release of
+that line, so every R-series release from `R13B` onwards is affected.
 
 The R-series and the numeric series use incompatible version schemes and share
 no comparable version space, so they must be expressed as separate segments
@@ -341,13 +351,13 @@ of the segment.
 
 **Real-world equivalents:**
 
-| Ecosystem | Expression |
-|-----------|-----------|
-| Elixir | `~> 1.3` |
-| npm | `^1.3.0` |
-| Cargo | `^1.3` |
-| RubyGems | `~> 1.3` |
-| Python (PEP 440) | `~=1.3` |
+| Ecosystem | Expression | Notes |
+|-----------|-----------|-------|
+| Elixir | `~> 1.3` | Exact equivalent in the default mode of `Version.match?/3` (`allow_pre: true`) |
+| npm | `^1.3.0` | Same bounds, but npm resolution also excludes interior pre-releases like `1.4.0-rc.1` by default |
+| Cargo | `^1.3` | Same bounds; pre-releases excluded from resolution by default |
+| RubyGems | `~> 1.3` | Same bounds; pre-releases never match unless the requirement itself names one |
+| Python (PEP 440) | `~=1.3` | Same bounds; pre-releases excluded unless explicitly requested |
 
 **Same pattern, different notation:**
 
@@ -359,7 +369,7 @@ of the segment.
 | NuGet | `6.*` | `>= 6.0.0, < inf(7.0.0)` — wildcard suffix fixes the major and opens the rest; resolved to the highest matching version at restore time |
 | Alpine / apk | `~=1.2` | `>= 1.2, < inf(1.3)` — fuzzy match operator ignoring the `_pN` packaging revision; same infimum upper bound structure |
 | Alpine / apk | `_alpha`, `_beta`, `_rc`, `_p` suffixes | Scheme-internal pre/post-release ordering; `1.0_rc1 < 1.0 < 1.0_p1` — the infimum concept applies with Alpine-specific suffix names instead of semver pre-release labels |
-| Gentoo portage | `~app-misc/foo-1.0` | Matches `1.0` and all packaging revisions (`1.0-r1`, `1.0-r2`, …) — equivalent to `>= 1.0, < inf(1.1)`; the `-rN` revision suffix is analogous to Debian's packaging revision |
+| Gentoo portage | `~app-misc/foo-1.0` | Matches `1.0` and all packaging revisions (`1.0-r1`, `1.0-r2`, …) — a revision window `[1.0, sup(1.0-rN))`, the supremum of `1.0`'s revision series; the `-rN` revision suffix is analogous to Debian's packaging revision |
 
 ## Example 6: Elixir `~> 1.3-beta` (pre-release lower bound)
 
@@ -409,8 +419,8 @@ segment remain included.
 
 | Ecosystem | Expression | Notes |
 |-----------|-----------|-------|
-| Debian / APT | `1.0~beta1` | The `~` suffix causes a version to sort below the unsuffixed version; `1.0~beta1 < 1.0` — equivalent to a lower bound at `inf(1.0)` |
-| RPM | `1.0~beta1` | Same tilde-before semantics as Debian in newer RPM versions |
+| Debian / APT | `>= 1.0~beta1` | The `~` suffix sorts below the unsuffixed version (`1.0~beta1 < 1.0`), giving the scheme a pre-release rung — `>= 1.0~beta1` is a pre-release lower bound exactly like this example's `>= 1.3.0-beta` |
+| RPM | `>= 1.0~beta1` | Same tilde-before semantics as Debian in newer RPM versions |
 
 ## Example 7: Complement — excluding a specific bad version
 
@@ -420,7 +430,7 @@ single bad version.
 
 ```
 COMPLEMENT(
-  SEGMENT(scheme = semver, from = 1.2.3, to = 1.2.3),
+  SEGMENT(scheme = semver, from >= 1.2.3, to <= 1.2.3),
   within = SEGMENT(scheme = semver, from >= 1.0.0, to < 2.0.0)
 )
 ```
@@ -451,7 +461,7 @@ require knowing the version immediately before or after.
 | npm | `">=1.0.0 <1.2.3 \|\| >1.2.3 <2.0.0"` |
 | Python (PEP 440) | `>=1.0.0, !=1.2.3, <2.0.0` |
 | RubyGems | `'>= 1.0.0', '!= 1.2.3', '< 2.0.0'` |
-| VERS | `vers:semver/>=1.0.0\|!=1.2.3\|<2.0.0` |
+| VERS (current) | `vers:semver/>=1.0.0\|!=1.2.3\|<2.0.0` |
 
 ## Example 8: Intersection — safe and compatible
 
@@ -845,11 +855,11 @@ this but not all of it in a single range expression.
 | Ecosystem | OR | Exclusion | AND / intersection | Notes |
 |-----------|:--:|:---------:|:------------------:|-------|
 | npm | ✓ `\|\|` | ✓ (split range) | ✗ (no explicit AND) | Exclusion requires writing two segments around the gap |
-| Python (PEP 440) | ✓ (multiple specifiers) | ✓ `!=1.2.*` | ✓ (comma = AND) | Most expressive; full compound requirements in one expression |
+| Python (PEP 440) | ✗ (no OR) | ✓ `!=1.2.*` | ✓ (comma = AND) | Specifiers conjoin only; exclusion is rich (`!=` with a `.*` wildcard) but there is no disjunction |
 | Elixir | ✓ `or` | ✓ `and != x` | ✓ `and` | Explicit `and`/`or` operators |
 | Maven | ✓ (multiple ranges) | ✓ `(,1.2.0),(1.3.0,)` | ✓ (interval intersection) | Math interval notation supports gaps and intersections |
 | Cargo | ✗ (no OR) | ✗ (no `!=`) | ✓ (comma = AND) | Cannot express OR across two lines in one constraint |
-| RubyGems | ✗ (no OR) | ✓ `!= 1.2.x` | ✓ (multiple constraints) | No OR; intersection only |
+| RubyGems | ✗ (no OR) | ✓ `!= 1.2.3` (exact versions only) | ✓ (multiple constraints) | No OR; excluding a whole sub-range takes one `!=` per version |
 | NuGet | ✗ (no OR) | ✗ (no `!=`) | ✓ (interval intersection) | Single range per dependency reference |
 
 ## Example 16: Unbounded range (any version)
@@ -986,8 +996,11 @@ are excluded — the gap in the linear order is the fixed tail of the `1.5.x`
 branch, which is how the fork shows up in a flat version list. Membership is
 decidable from version strings alone, because semver sorts every `1.6.x`
 version above every `1.5.x` version: neither window can capture the other
-branch's versions. Contrast with Example 9, where the abandoned branch has no
-fix and its segment must be capped by cuts instead of a known version.
+branch's versions. (Had `1.6.0` shipped pre-releases, they would have
+inherited the bug but fall below the `>= 1.6.0` bound; a cut lower bound,
+`inf(1.6.0)`, would cover them.) Contrast with Example 9, where the
+abandoned branch has no fix and its segment must be capped by cuts instead
+of a known version.
 
 This is the most common real-world advisory shape: a vulnerability spanning
 maintenance branches, each fixed independently.

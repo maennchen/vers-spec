@@ -28,8 +28,10 @@ branches exist; on which branch the fix was applied and in which version.
 
 **Semantics needed:** a precise, possibly disjoint set of versions across
 multiple branches; the ability to exclude specific fixed versions within an
-otherwise affected range; no need to predict future releases (the set of
-affected versions is closed at disclosure time).
+otherwise affected range. The set of affected versions is closed at
+disclosure time only where every branch has received a fix: a branch
+abandoned without one stays affected indefinitely, so the range must remain
+correct for that branch's possible future releases.
 
 Real-world systems that express vulnerability ranges include
 [NVD](https://nvd.nist.gov/), [OSV](https://osv.dev/), and

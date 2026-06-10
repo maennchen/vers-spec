@@ -142,13 +142,18 @@ branch, every block is decidable from version strings alone.
 Some upper bounds cannot be expressed as a concrete version without ambiguity
 at the pre-release boundary. The infimum of a version `v` is a cut in the
 scheme's ordering (see
-[dag-range-primitives.md](dag-range-primitives.md)): the position immediately
-below the lowest pre-release of `v`. A bound against the cut is written by
+[dag-range-primitives.md](dag-range-primitives.md)): a position that no
+version equals, partitioning all possible versions of the scheme into those
+below it and those above. Where the scheme places it is the scheme's
+decision; in semver it sits immediately below the lowest pre-release of `v`.
+A bound against the cut is written by
 prefixing an ordering comparator with `$`: `$<v` excludes all pre-releases
 of `v` while including all versions that sort below them, and `$>=v` starts
 at the beginning of the `v` family, including its pre-releases. Because no
-version is ever equal to a cut, `$>=v` and `$>v` (and likewise `$<v` and
-`$<=v`) coincide. `$` is invalid on `=`, `!=`, and `*`.
+version is ever equal to a cut, `$>v` would coincide with `$>=v`, and
+`$<=v` with `$<v`; the notation therefore admits exactly one spelling per
+direction — `$>=` and `$<` — and rejects `$>` and `$<=`, along with `$=`
+and `$*`.
 
 ```
 $<2.0.0
@@ -167,9 +172,12 @@ version string, not by querying a repository.
 
 The `$` modifier is a notation-level concept; which cut it denotes is
 defined by the version scheme, not the notation. A scheme that supports
-cuts must specify, for every version `v`, the position of the cut of `v`
-in its ordering: semver places it immediately before the lowest pre-release
-of `v`; debian places it below the `~`-suffixed variants of `v`. The
+cuts must specify which versions carry a cut and where each cut sits in
+its ordering: semver places the cut of `v` immediately before the lowest
+pre-release of `v`, and defines it only for versions without pre-release or
+build identifiers — `$<2.0.0-rc.1` is invalid, because within a pre-release
+ladder plain comparators already name every position. Debian places the cut
+below the `~`-suffixed variants of `v`. The
 notation imposes only one requirement — no version is ever equal to a cut.
 A scheme may place the cut of `v` immediately below `v` itself, in which
 case `$<v` coincides with `<v` and `$>=v` with `>=v`. A scheme that does
@@ -257,7 +265,7 @@ Filters are per-segment. In a multi-scheme expression, each scheme block may
 carry its own filter:
 
 ```
-vers:(semver/>=2.0.0|#stable)|(calver-ym/>=2021.01|#stable)
+vers:(semver/>=2.0.0|#stable)|(otp/>=26.0|#stable)
 ```
 
 **Example — open-ended prospective range, stable only:**
@@ -289,6 +297,11 @@ The result is every version matched by the left side that is not matched by the
 right side. The `\` operator has lower precedence than `|`, so each side's
 comparator list is parsed in full before the subtraction is applied.
 
+Like the `|` separator that current VERS already uses unencoded, `\` lies
+outside RFC 3986's reserved and unreserved sets. This is acceptable for the
+same reason as `#` (Extension 3): a VERS is an identifier in URI form, not
+a URL to be dereferenced.
+
 Multiple subtractions chain left-associatively:
 
 ```
@@ -301,8 +314,11 @@ A\B\C  ≡  (A\B)\C
 vers:semver/>=1.0.0|<2.0.0\=1.2.3
 ```
 
-All `1.x` releases except `1.2.3`. This is equivalent to the existing
-`vers:semver/>=1.0.0|!=1.2.3|<2.0.0` — both forms are valid.
+All `1.x` releases except `1.2.3`. Current VERS writes this with its `!=`
+comparator (`vers:semver/>=1.0.0|!=1.2.3|<2.0.0`); this proposal drops
+`!=` — subtraction is the only spelling for exclusion, of a single version
+and of a whole range alike (see
+[Backward compatibility](#backward-compatibility) for the migration).
 
 **Example — exclude a sub-range:**
 
@@ -335,23 +351,35 @@ concatenation of their comparator lists. The primary use case is combining
 independently authored prospective ranges — each author writes their own
 constraint, and a version must satisfy all of them simultaneously.
 
+Concatenation joins the two lists as sets: a constraint or filter that
+appears in both inputs as the same string is written once, and `*` — the
+identity of the conjunction — is dropped when version comparators join it.
+Both reductions are string-level, so any tool can apply them. If the inputs
+still share a version string after deduplication, the pair is one of the
+same-version cases enumerated under [Validation](#validation) —
+contradictory, reducible to a single comparator, or a cut-window — and the
+combining tool must apply the documented rewrite before emitting the
+expression.
+
 **Example — two prospective constraints:**
 
 Package A requires `~> 1.3` (expressed as `>=1.3.0|$<2.0.0`) and package B
-requires `~> 1.6` (expressed as `>=1.6.0|$<2.0.0`). The combined requirement
-is the concatenation of the two lists:
+requires `~> 1.6` (expressed as `>=1.6.0|$<2.0.0`). Concatenation writes the
+shared `$<2.0.0` once:
 
 ```
-vers:semver/>=1.3.0|$<2.0.0|>=1.6.0|$<2.0.0
+vers:semver/>=1.3.0|$<2.0.0|>=1.6.0
 ```
 
-A scheme-aware normalizer reduces this to `vers:semver/>=1.6.0|$<2.0.0`.
+A scheme-aware normalizer further reduces this to
+`vers:semver/>=1.6.0|$<2.0.0`.
 
 **Example — safe and compatible (Example 8):**
 
 Versions of `foo` that are compatible (`>=2.0.0|<3.0.0`) and not in the
 vulnerable range (`>=2.1.0|<2.2.0`). Example 8 phrases this as an
-intersection with a complement, A ∩ (U \ B); since A ∩ (U \ B) = A \ B, the
+intersection with a complement, A ∩ (W \ B); since A ∩ (W \ B) = A \ B
+whenever W ⊇ A, the
 notation expresses it directly with set-minus (Extension 4):
 
 ```
@@ -367,7 +395,8 @@ under different schemes intersect to the empty set (a version has identity
 in exactly one scheme) and are dropped — so schemes present in only one
 input vanish. Two blocks under the same scheme intersect by concatenating
 their positive comparator lists — merging their filter groups into one
-comma-separated `#` group — and keeping the subtractions of both:
+comma-separated `#` group, with the same string-level deduplication as
+above — and keeping the subtractions of both:
 
 ```
 (A\B) ∩ (C\D)  =  (A|C)\B\D
@@ -379,6 +408,10 @@ where `A|C` stands for the concatenation of the two comparator lists. When
 both inputs contain several blocks of the same scheme, the distribution
 yields one block per same-scheme pair. A tool combining independently
 authored ranges applies this distribution when constructing the expression.
+Dropping cross-scheme pairs is string-decidable; whether a same-scheme pair
+is empty generally is not, so a scheme-agnostic combiner keeps such blocks
+and leaves emptiness to scheme-aware validation downstream (see
+[Validation](#validation)).
 
 ## Scheme evaluability
 
@@ -427,17 +460,32 @@ The combinations give three kinds of scheme:
   is the range "descendants of the introducing commit that are ancestors
   of the fix" (the order is partial: a commit on a side branch is neither,
   and satisfies no bound) — but evaluating membership requires the
-  repository. Only `=`, `!=`, and `*` are decidable from strings alone
-  (identity comparisons). Cuts are invalid outright: a graph carries no
+  repository. Only `=` and `*` are decidable from strings alone (identity
+  comparisons — including the subtraction of exact pins, `\=v`). Cuts are
+  invalid outright: a graph carries no
   series structure for a cut to denote, so the scheme defines no infimum
   semantics and rejects `$` (Extension 2).
+
+The fourth combination — series structure without a string-decidable order —
+is not a class of its own, because a cut is a position in an ordering:
+series structure as defined here presupposes one. A scheme whose strings
+name a series but carry no order within it (git tags under a
+`release-1.4-*` naming convention, say) is graph-ordered; its
+string-decidable series information is still usable, but through filters
+(Extension 3) rather than cuts — branch membership becomes a
+string-decidable predicate even though no interval can order the versions
+inside the branch.
 
 A tool that encounters ordering comparators over a graph-ordered scheme and
 has no graph access MUST report the range as not evaluable. It must not fall
 back to lexicographic or timestamp ordering — silent linearization produces
 wrong answers. Authors who need flat-list evaluability over a graph-ordered
 scheme can enumerate the affected identifiers explicitly with `=` constraints;
-retrospective ranges are finite, so enumeration is always possible.
+the versions released at any point in time are finite, so enumeration is
+always possible for them. It is a snapshot, though: a branch left without a
+fix may receive further affected releases, which no enumeration written
+earlier can cover (see "Forks and branches" in
+[dag-range-primitives.md](dag-range-primitives.md)).
 
 ## Operator precedence summary
 
@@ -445,7 +493,7 @@ From highest to lowest:
 
 | Level | Operator | Meaning |
 |-------|----------|---------|
-| 1 | `<1.2.3`, `>=1.2.3`, `!=1.2.3`, `$<1.2.3`, `#stable` | Individual comparators and the filter group |
+| 1 | `<1.2.3`, `>=1.2.3`, `=1.2.3`, `$<1.2.3`, `#stable` | Individual comparators and the filter group |
 | 2 | `\|` | AND (comparator list within a segment) |
 | 3 | `\` | Set-minus (complement) |
 | 4 | `(scheme/...)\|(scheme/...)` | Union of blocks |
@@ -459,36 +507,49 @@ scheme-block    = scheme "/" complement-expr
 complement-expr = comparator-list *( "\" comparator-list )
 comparator-list = constraints [ "|" filters ]
 constraints     = "*" / version-comparator *( "|" version-comparator )
-version-comparator = [ "$" ] ( "<" / "<=" / ">" / ">=" ) version
-                   / ( "=" / "!=" ) version
+version-comparator = "$" ( "<" / ">=" ) version
+                   / ( "<" / "<=" / ">" / ">=" ) version
+                   / "=" version
 filters         = "#" filter *( "," filter )
 scheme          = ALPHA *( ALPHA / DIGIT / "." / "-" )
 version         = 1*( safe-char / pct-encoded )
 filter          = 1*( safe-char / pct-encoded )
-safe-char       = ALPHA / DIGIT / "." / "_" / "-" / "~" / "+" / ":"
+safe-char       = ALPHA / DIGIT / "." / "_" / "-" / "~" / "+" / ":" / "!"
 pct-encoded     = "%" HEXDIG HEXDIG
 ```
 
-`ALPHA`, `DIGIT`, and `HEXDIG` are the RFC 5234 core rules. The `scheme` is
-case-insensitive with lowercase as the canonical form, matching the current
-specification.
+`ALPHA`, `DIGIT`, and `HEXDIG` are the RFC 5234 core rules. RFC 5234 string
+literals match case-insensitively, so the grammar also admits `VERS:`; as
+in the current specification, lowercase is the canonical form for the
+`vers` prefix and the scheme.
 
 `version` and `filter` share one lexical rule: any character outside the
 safe set — including every structural character of this notation (`|`, `/`,
 `(`, `)`, `\`, `#`, `,`, `$`, `*`, `%`, and the comparator characters
-`<`, `>`, `=`, `!`) — must be percent-encoded. Tokenization therefore never
+`<`, `>`, `=`) — must be percent-encoded. `!` is in the safe set because it
+no longer carries any structural role: with `!=` removed, no comparator
+starts with `!`, so a raw `!` can only be a version or filter character —
+PEP 440's epoch separator (`1!2.0`) is written directly. A legacy `!=`
+constraint still fails to parse, since constraints begin with a comparator,
+never with a version. Tokenization
+therefore never
 depends on the version scheme's syntax: together with `$` preceding the
 comparator, a parser can split any expression into tokens without knowing
 the scheme. The safe set covers the characters real schemes use in practice
-(semver's `.-+`, deb's `:~`, alpine's `_`), so percent-encoding is the escape
-hatch, not the common case.
+(semver's `.-+`, deb's `:~`, alpine's `_`, PEP 440's `!`), so
+percent-encoding is the escape hatch, not the common case. A
+percent-encoded octet denotes the character it encodes: version and filter
+strings compare after decoding, and in canonical form safe characters
+appear raw — `1%212.0` denotes the same version as `1!2.0` and is
+non-canonical.
 
 The grammar enforces a stratification. Within a scheme block, a
 `comparator-list` is semantically a single segment — conjoined bounds
-describe one interval; `!=` and filters punch holes in it — so the positive
+describe one interval, which a filter restricts — so the positive
 part of a `complement-expr` is always one segment, from which each `\`
-subtracts another. Unions of independently positive segments exist only at
-the block
+subtracts another. With no `!=` comparator, subtraction is the only
+negation in the notation. Unions of independently positive segments exist
+only at the block
 level. Every expression is therefore in disjunctive normal form: a union of
 blocks, each an intersection term with complemented segments as negated
 literals. This is the normal-form commitment from
@@ -513,11 +574,15 @@ must enforce them:
   carries over the current rule that `*` stands alone, relaxed in exactly
   two ways: a filter group may accompany it (`*|#stable`), and it may be
   the positive side of a subtraction (`*\>=1.2.3`).
-- `*` must not appear as a subtrahend: `A\*` denotes the empty set.
+- A bare `*` — one with no filter group — must not appear as a subtrahend:
+  `A\*` denotes the empty set. A filtered universe may: `A\*|#prerelease`
+  subtracts every version matching the filter from `A`.
 - Within one comparator list, a version string occurs at most once,
-  regardless of comparators. Two constraints on the same version are
-  contradictory (`>=1.0.0|<1.0.0`), reducible to a single comparator
-  (`>=1.0.0|!=1.0.0` is `>1.0.0`), or — when exactly one of them is a cut —
+  regardless of comparators. An exact duplicate is simply written once; two
+  distinct constraints on the same version are contradictory
+  (`>=1.0.0|<1.0.0`), reducible to a single comparator
+  (`>=1.0.0|>1.0.0` is `>1.0.0`; `<=1.0.0|>=1.0.0` is `=1.0.0`), or — when
+  exactly one of them is a cut —
   expressible with the version on the subtrahend side: `$>=2.0.0|<2.0.0`,
   the pre-releases of `2.0.0`, is written `$>=2.0.0\>=2.0.0`. The rule
   therefore costs no expressiveness. It is scoped to a single list: the
@@ -547,22 +612,34 @@ that a scheme-aware normalizer reduces to `>=1.6.0`.
 ## Backward compatibility
 
 **Syntax.** This proposal accepts only canonical forms; it is not a strict
-superset of the current syntax. No existing comparator syntax is modified,
-and the new characters `$`, `#`, `\`, `,`, and `(`, `)` are not used in
-any current VERS comparator, but two current allowances do not carry over:
+superset of the current syntax. The new characters `$`, `#`, `\`, `,`, and
+`(`, `)` are not used in any current VERS comparator, but one comparator is
+removed and three current allowances do not carry over:
 
+- The `!=` comparator is removed: subtraction (Extension 4) is the only
+  spelling for exclusion. A legacy `!=` constraint migrates to a `\=`
+  subtraction at the end of its block — `vers:gem/>=2.2.0|!=2.2.1|<2.3.0`
+  becomes `vers:gem/>=2.2.0|<2.3.0\=2.2.1` — and multiple exclusions chain
+  (`\=a\=b`). A legacy `!=` fails to parse here, so this migration cannot
+  be missed silently.
 - A bare version is no longer shorthand for equality: `vers:npm/1.2.3` must
   be written `vers:npm/=1.2.3`. Every constraint is spelled the same way —
   an explicit comparator followed by a version — which keeps the grammar
   free of a comparator-less special case. Migration is the mechanical
   insertion of `=`.
+- Whitespace is no longer insignificant. The current specification strips
+  spaces (`>= 1.2.3` and `>=1.2.3` are equivalent); the grammar here admits
+  none. Migration removes the spaces.
 - The lexical rules now require percent-encoding for any version character
-  outside the safe set (`A–Z a–z 0–9 . _ - ~ + :`). Versions in existing
+  outside the safe set (`A–Z a–z 0–9 . _ - ~ + : !`). Versions in existing
   expressions consist almost universally of safe characters; an expression
   whose version strings contain a now-structural character must
   percent-encode it when migrating. Such an expression does not necessarily
-  fail to parse — `>=1.0#beta` parses as a constraint with a `beta` filter
-  — so migration tooling must scan version strings for structural
+  fail to parse: `#` is an ordinary version character in current VERS, so a
+  legacy range `vers:some-scheme/>=1.0|#beta` — versions at least `1.0`,
+  plus the single version `#beta` — parses here as `>=1.0` with a `beta`
+  filter.
+  Migration tooling must therefore scan version strings for structural
   characters rather than rely on parse errors. This is an accepted
   consequence of a migration that preserves compatibility in spirit rather
   than strictly.
@@ -570,8 +647,10 @@ any current VERS comparator, but two current allowances do not carry over:
 **Semantics.** This proposal is not semantically backward-compatible. Current
 VERS gives the comparator list interval semantics; this proposal gives it
 conjunction semantics. The two readings agree on any list that describes a
-single interval — at most one lower and one upper bound, plus any number of
-`!=` exclusions — which covers the common case. They disagree on lists that
+single interval — at most one lower and one upper bound — which covers the
+common case; a legacy list's `!=` exclusions do not change this, since
+their `\=` rewrites carry the same meaning under both readings. The
+readings disagree on lists that
 encode multiple intervals: `vers:semver/>=1.1.0|<1.3.0|>=2.0.0|<3.0.0` means
 two disjoint intervals today but is unsatisfiable as a conjunction. An
 enumeration of versions (`vers:pypi/0.0.1|0.0.2`) is the degenerate case —
@@ -579,11 +658,16 @@ each `=` constraint is its own single-version interval.
 
 The migration is mechanical. Sort the constraints by version (as the current
 containment algorithm already does), split the list at each interval
-boundary, and wrap each interval in a union block (Extension 1):
+boundary, and wrap each interval in a union block (Extension 1); a legacy
+`!=` constraint becomes a `\=` subtraction on the block whose interval
+contains its version:
 
 ```
 vers:semver/>=1.1.0|<1.3.0|>=2.0.0|<3.0.0
 → vers:(semver/>=1.1.0|<1.3.0)|(semver/>=2.0.0|<3.0.0)
+
+vers:semver/>=1.0.0|!=1.2.3|<2.0.0|>=3.0.0|<4.0.0
+→ vers:(semver/>=1.0.0|<2.0.0\=1.2.3)|(semver/>=3.0.0|<4.0.0)
 
 vers:pypi/0.0.1|0.0.2
 → vers:(pypi/=0.0.1)|(pypi/=0.0.2)
@@ -591,3 +675,74 @@ vers:pypi/0.0.1|0.0.2
 
 The rewrite needs no knowledge of the underlying scheme beyond the version
 ordering that the current containment algorithm already requires.
+
+## Side-by-side examples
+
+The table maps native range expressions from real ecosystems to current
+VERS (v1) and to this proposal. ✗ means the column cannot express the row.
+Three conventions keep the table honest:
+
+- **(approx.)** marks the closest v1 form: v1 has no cuts, so a bound at a
+  series boundary places that boundary's pre-releases on the wrong side
+  (`<2.0.0` admits `2.0.0-rc.1` — see Extension 2). The v1 column reads
+  under interval semantics, the proposal column under conjunction
+  semantics.
+- **(hand-computed)** marks a v1 form that denotes the right set only after
+  the author evaluates the composition themselves — the authoring structure
+  (filter, intersection, subtraction, universe-minus-exceptions) is lost.
+- The columns encode the version set the native *bounds* denote. Whether a
+  resolver admits pre-releases inside those bounds is ecosystem policy, not
+  bound structure (see the worked examples in [examples.md](examples.md)),
+  except where the native syntax itself names the policy.
+
+Scheme names are illustrative purl types.
+
+| Ecosystem | Native range | VERS v1 | VERS (this proposal) |
+|-----------|--------------|---------|----------------------|
+| npm | `1.2.3` | `vers:npm/1.2.3` | `vers:npm/=1.2.3` |
+| npm | `>=1.1.0 <2.0.0` | `vers:npm/>=1.1.0\|<2.0.0` | `vers:npm/>=1.1.0\|<2.0.0` |
+| npm | `^1.2.3` | `vers:npm/>=1.2.3\|<2.0.0` (approx.) | `vers:npm/>=1.2.3\|$<2.0.0` |
+| npm | `~1.2.3` | `vers:npm/>=1.2.3\|<1.3.0` (approx.) | `vers:npm/>=1.2.3\|$<1.3.0` |
+| npm | `1.2.x` | `vers:npm/>=1.2.0\|<1.3.0` (approx.) | `vers:npm/>=1.2.0\|$<1.3.0` |
+| npm | `1.2.3 - 2.3.4` | `vers:npm/>=1.2.3\|<=2.3.4` | `vers:npm/>=1.2.3\|<=2.3.4` |
+| npm | `<1.3.0 \|\| >=2.0.0` | `vers:npm/<1.3.0\|>=2.0.0` | `vers:(npm/<1.3.0)\|(npm/>=2.0.0)` |
+| npm | `>=1.1.0 <1.3.0 \|\| >=2.0.0 <3.0.0` | `vers:npm/>=1.1.0\|<1.3.0\|>=2.0.0\|<3.0.0` | `vers:(npm/>=1.1.0\|<1.3.0)\|(npm/>=2.0.0\|<3.0.0)` |
+| npm | `*` | `vers:npm/*` | `vers:npm/*` |
+| npm | `latest` (dist-tag) | ✗ | ✗ (label — out of scope, see introduction) |
+| Cargo | `1.2.3` (bare = caret) | `vers:cargo/>=1.2.3\|<2.0.0` (approx.) | `vers:cargo/>=1.2.3\|$<2.0.0` |
+| Cargo | `~1.2` | `vers:cargo/>=1.2.0\|<1.3.0` (approx.) | `vers:cargo/>=1.2.0\|$<1.3.0` |
+| Python (PEP 440) | `==1.2.3` | `vers:pypi/1.2.3` | `vers:pypi/=1.2.3` |
+| Python (PEP 440) | `~=1.4.2` | `vers:pypi/>=1.4.2\|<1.5.0` (approx.) | `vers:pypi/>=1.4.2\|$<1.5.0` |
+| Python (PEP 440) | `==1.4.*` | `vers:pypi/>=1.4.0\|<1.5.0` (approx.) | `vers:pypi/$>=1.4.0\|$<1.5.0` |
+| Python (PEP 440) | `!=1.5.0` | `vers:pypi/!=1.5.0` | `vers:pypi/*\=1.5.0` |
+| Python (PEP 440) | `>=1.0, !=1.4.*, <2.0` | `vers:pypi/>=1.0\|<1.4.0\|>=1.5.0\|<2.0` (approx., hand-computed) | `vers:pypi/>=1.0\|<2.0\$>=1.4.0\|$<1.5.0` |
+| Python (PEP 440) | `>=1!2.0` (epoch) | `vers:pypi/>=1%212.0` | `vers:pypi/>=1!2.0` |
+| Python (pip) | `>=2.0` (default: no pre-releases) | ✗ | `vers:pypi/>=2.0\|#stable` |
+| RubyGems | `~> 2.2` | `vers:gem/>=2.2.0\|<3.0.0` (approx.) | `vers:gem/>=2.2.0\|$<3.0.0` |
+| RubyGems | `'>= 2.2.0', '!= 2.2.1', '< 2.3.0'` | `vers:gem/>=2.2.0\|!=2.2.1\|<2.3.0` | `vers:gem/>=2.2.0\|<2.3.0\=2.2.1` |
+| Elixir / Hex | `~> 1.3` | `vers:hex/>=1.3.0\|<2.0.0` (approx.) | `vers:hex/>=1.3.0\|$<2.0.0` |
+| Elixir / Hex | `~> 1.3.2` | `vers:hex/>=1.3.2\|<1.4.0` (approx.) | `vers:hex/>=1.3.2\|$<1.4.0` |
+| Elixir / Hex | `~> 1.3 or ~> 2.7` | `vers:hex/>=1.3.0\|<2.0.0\|>=2.7.0\|<3.0.0` (approx.) | `vers:(hex/>=1.3.0\|$<2.0.0)\|(hex/>=2.7.0\|$<3.0.0)` |
+| Elixir / Hex | `~> 1.3` and `~> 1.6` (two manifests) | `vers:hex/>=1.6.0\|<2.0.0` (approx., hand-computed) | `vers:hex/>=1.3.0\|$<2.0.0\|>=1.6.0` |
+| Maven | `[1.0,2.0)` | `vers:maven/>=1.0\|<2.0` | `vers:maven/>=1.0\|<2.0` |
+| Maven | `[1.0,1.2),(1.4,2.0)` | `vers:maven/>=1.0\|<1.2\|>1.4\|<2.0` | `vers:(maven/>=1.0\|<1.2)\|(maven/>1.4\|<2.0)` |
+| Maven | `[1.5]` | `vers:maven/1.5` | `vers:maven/=1.5` |
+| NuGet | `1.0` (bare = minimum) | `vers:nuget/>=1.0` | `vers:nuget/>=1.0` |
+| NuGet | `6.*` | `vers:nuget/>=6.0.0\|<7.0.0` (approx.) | `vers:nuget/>=6.0.0\|$<7.0.0` |
+| Go modules | `require foo v1.2.3` (minimum, MVS) | `vers:golang/>=v1.2.3` | `vers:golang/>=v1.2.3` |
+| Composer | `~1.2.3` | `vers:composer/>=1.2.3\|<1.3.0` (approx.) | `vers:composer/>=1.2.3\|$<1.3.0` |
+| Debian | `(>= 1:0.9.0-1), (<< 2:1.2.0-1)` | `vers:deb/>=1:0.9.0-1\|<2:1.2.0-1` | `vers:deb/>=1:0.9.0-1\|<2:1.2.0-1` |
+| Alpine / apk | `~=1.2` | `vers:apk/>=1.2\|<1.3` (approx.) | `vers:apk/>=1.2\|$<1.3` |
+| OSV | `introduced: 1.1.0`, `fixed: 2.0.0` | `vers:semver/>=1.1.0\|<2.0.0` | `vers:semver/>=1.1.0\|<2.0.0` |
+| CVE JSON v5 | `defaultStatus: affected`, fixed `1.2.3` (1.x) and `2.0.1` | `vers:semver/<1.2.3\|>=2.0.0\|<2.0.1` (approx., hand-computed) | `vers:semver/*\>=1.2.3\|$<2.0.0\>=2.0.1` |
+| (any — scheme switch) | calver releases, then semver from `1.0.0`, fixed `1.4.0` | ✗ | `vers:(calver-ym/>=2021.01)\|(semver/>=1.0.0\|<1.4.0)` |
+| Node.js | LTS policy: stable, even majors, from 18 | ✗ | `vers:node/>=18.0.0\|#stable,lts` |
+| git | `abc1234..def5678` (commit range) | ✗ | `vers:git/>abc1234\|<def5678` (requires graph access) |
+
+Rows worth lingering on: the Cargo, NuGet, and Go rows show that a bare
+native version means three different things (caret range, minimum,
+minimum) — none of them equality; the OSV row needs no cut because OSV's
+`fixed` bound deliberately leaves the fixed version's pre-releases
+affected, which plain `<` expresses exactly; and the two-manifest Hex row
+is the conjunction doing intersection's job — the combined list is the
+verbatim concatenation of the two requirements, deduplicated.

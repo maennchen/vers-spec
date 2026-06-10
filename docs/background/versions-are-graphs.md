@@ -216,7 +216,7 @@ R15A → R15B → R15B01 → R15B02 → R15B03
 R16A → R16B → R16B01 → R16B02 → R16B03 → R16B03-1
 ```
 
-**From 2014 onwards:** releases switched to a numeric scheme with 2–4 parts (`<major>.<minor>` up to `<major>.<minor>.<patch>.<build>`):
+**From 2014 onwards:** releases switched to a numeric scheme with two or more dot-separated parts (`<major>.<minor>`, extended with a patch part — and further parts as fixes land on already-patched older branches):
 
 ```
 17.0 → 17.1 → 17.2 → 17.3 → 17.4 → 17.5
@@ -287,8 +287,9 @@ gitGraph
 
 A hypothetical vulnerability present in Node.js 18.x, 19.x, 20.x, and 21.x
 but fixed in 18.20.0, 20.12.0, and 22.0.0 (with 19.x and 21.x reaching EOL
-before a patch was issued) cannot be expressed as a simple range. The patched
-versions are four separate points on four separate branches. The "safe" set is
+before a patch was issued) cannot be expressed as a simple range. The fixes
+are three separate points on three separate lines, and the affected set
+spans four. The "safe" set is
 not a contiguous region of any number line.
 
 ### Pre-release branches that never reconverge: OpenSSL 1.0.2 RC series
